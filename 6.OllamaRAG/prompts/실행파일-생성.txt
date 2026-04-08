@@ -1,0 +1,15 @@
+# 폐쇄망용 오픈소스 LLM RAG 챗봇 실행 파일 생성 프롬프트
+
+다음 요구사항에 따라 tkinter 기반 로컬 GUI RAG 챗봇을 Windows 실행 파일(.exe)로 변환하는 스크립트와 설정 파일을 만들어주세요.
+
+## 사전 설치 명령어
+winget install Ollama.Ollama
+ollama pull bge-m3
+ollama pull exaone3.5:2.4b
+
+## 목적
+- rag-ollama.py 를 참고하여 tkinter 기반 로컬 GUI RAG 챗봇 'rag-ollama-gui.py' 생성
+- rag-ollama-gui.py를 독립 실행 파일(.exe)로 변환하는 'build_exe.py' 생성
+- Ollama 서버 자동 실행 기능 포함
+- 완전한 폐쇄망 환경에서 인터넷 없이 실행 가능
+- 사용자가 쉽게 실행할 수 있는 로컬 GUI 제공 (tkinter 사용)

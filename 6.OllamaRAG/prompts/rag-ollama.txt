@@ -1,0 +1,242 @@
+# 폐쇄망용 오픈소스 LLM RAG 챗봇 Streamlit 애플리케이션 생성 프롬프트
+
+다음 요구사항에 따라 Streamlit 기반의 폐쇄망용 오픈소스 LLM RAG 챗봇 애플리케이션을 만들어주세요.
+
+## 0. 사전 설치
+
+winget install Ollama.Ollama
+
+ollama pull exaone3.5:2.4b
+ollama pull bge-m3
+
+## 1. 기본 설정
+
+### 1.1 페이지 설정
+- 페이지 제목: "폐쇄망 RAG 챗봇"
+- 페이지 아이콘: "📚"
+- 레이아웃: "wide"
+
+### 1.2 필요한 라이브러리
+```python
+import os
+import streamlit as st
+import tempfile
+from dotenv import load_dotenv
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.chat_models import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from datetime import datetime
+import logging
+import re
+from typing import Any
+```
+
+### 1.3 로깅 설정
+- logs 디렉토리에 일별 로그 파일 생성 (rag_ollama_YYYYMMDD.log)
+- HTTP 요청 로그 비활성화 (httpx, httpcore, urllib3, langchain 등)
+- INFO 레벨 로그는 출력하지 않음 (ERROR, WARNING만)
+
+## 2. UI 구성
+
+### 2.1 상단 헤더
+- 왼쪽: 로고 이미지 (logo.png 파일 사용, 없으면 기본 아이콘, width=180)
+- 중앙: "폐쇄망 RAG 챗봇" 제목 (4rem 크기)
+- 오른쪽: 여백
+
+### 2.2 CSS 스타일
+- 버튼 스타일: 분홍색 배경 (#ff69b4)
+- 버튼 호버: 더 진한 분홍색 (#ff1493)
+
+### 2.3 사이드바 구성 (구분선 없음)
+1. **Ollama 모델 선택**
+   - 라디오 버튼으로 선택
+   - 옵션: "exaone3.5:2.4b", "qwen2.5:3b", "llama3.2:1b", "gemma2:2b", "llama3", "mistral" 등
+   - 기본값: "exaone3.5:2.4b" (한국어 성능이 우수하고 용량이 작음)
+   - 모델 변경 시 대화 기록은 유지
+
+2. **온도 설정**
+   - 슬라이더 (0.0 ~ 1.0)
+   - 기본값: 0.7
+   - LLM의 창의성 조절
+
+3. **RAG (PDF 검색) 선택**
+   - 라디오 버튼으로 선택
+   - 옵션: "사용 안 함", "RAG 사용"
+   - 기본값: "사용 안 함"
+   - "사용 안 함" 선택 시 PDF 없이도 일반 챗봇으로 대화 가능
+   - "RAG 사용" 선택 시 PDF 파일이 있어야 대화 가능
+
+4. **PDF 파일 업로드**
+   - 다중 파일 업로드 지원
+   - "파일 처리하기" 버튼
+   - 처리된 파일 목록 표시
+
+5. **대화 초기화 버튼**
+   - 대화 기록만 초기화
+   - 벡터 스토어는 유지
+
+6. **벡터 스토어 초기화 버튼**
+   - 벡터 스토어와 처리된 파일 목록 초기화
+   - 대화 기록은 유지
+
+7. **현재 설정 표시**
+   - 선택된 Ollama 모델
+   - 임베딩 모델: bge-m3 (고정)
+   - 온도 설정값
+   - RAG 상태
+   - 처리된 파일 수
+   - 대화 기록 수
+   - st.text()로 표시 (st.info() 사용 안 함)
+
+## 3. 핵심 기능
+
+### 3.1 Ollama LLM 함수
+```python
+def get_ollama_llm(model_name: str, temperature: float = 0.7) -> Any:
+    """선택한 Ollama 모델 반환"""
+    - ChatOllama 사용
+    - base_url: "http://localhost:11434"
+    - 모델명 동적 선택
+    - 온도 설정
+    - 연결 실패 시 에러 처리
+```
+
+### 3.2 임베딩 함수
+```python
+def get_embeddings():
+    """Ollama bge-m3 임베딩 모델 반환"""
+    - OllamaEmbeddings 사용
+    - 모델명: "bge-m3" (고정)
+    - 세션 상태에 캐싱하여 재사용
+    - 로드 실패 시 에러 처리 및 설치 안내
+```
+
+### 3.3 구분선 및 취소선 제거 함수
+```python
+def remove_separators(text: str) -> str:
+    """취소선과 구분선 제거, 연속된 빈 줄 정리"""
+    - 취소선(~~텍스트~~) 제거
+    - 구분선(---, ===, ___) 제거
+    - 연속된 빈 줄을 2개로 제한
+```
+
+### 3.4 PDF 처리
+- PyPDFLoader 사용
+- RecursiveCharacterTextSplitter (chunk_size=1000, chunk_overlap=200)
+- FAISS 벡터 스토어
+- 배치 처리 (batch_size=30)
+- 검색 결과 수: k=10
+- 처리 진행 상황 표시 (progress bar + 상태 메시지)
+  - 임베딩 모델 로딩 → 0~10%
+  - PDF 로드 (파일별 진행 표시) → 10~20%+
+  - 텍스트 분할 → 40%
+  - 벡터 임베딩 생성 (총 청크/배치 표시) → 40~100%
+
+### 3.5 RAG 답변 생성
+- 벡터 스토어에서 관련 문서 검색 (k=10)
+- 대화 맥락 메모리: 최근 50개 대화
+- 스트리밍 응답으로 실시간 표시
+- 구분선/취소선 자동 제거
+
+### 3.6 다음 질문 3개 생성 함수
+- 답변 기반으로 다음 질문 3개 생성
+- 답변 끝에 자동 추가
+- 번호와 함께 표시
+
+## 4. 답변 생성 로직
+
+### 4.1 우선순위
+1. RAG가 "사용"이고 PDF 파일이 있으면 → RAG 사용
+2. RAG가 "사용"이지만 PDF 파일이 없으면 → 경고 메시지 표시
+3. RAG가 "사용 안 함"이면 → 직접 LLM 사용 (PDF 없이도 대화 가능)
+4. 인터넷 검색 기능은 제거 (폐쇄망 환경)
+
+### 4.2 답변 형식 요구사항
+모든 답변에 다음 지시 포함:
+- 반드시 한국어 존대말로만 답변 (영어 금지)
+- 한글 서술형 문장으로만 작성
+- 같은 내용 반복 없이 간결하고 완전한 문장
+- 구분선(---, ===, ___) 금지, 취소선(~~텍스트~~) 금지
+- 참조 표시나 출처 문구 금지
+
+### 4.3 시스템 메시지
+답변을 생성할 때, 다음과 같이 지시하세요:
+```
+너는 매우 친절한 선생님이야. 답변은 매우 쉽게 중학생 레벨에서 이해할 수 있도록 해줘. 그러나 내용은 생략하는 것 없이 모두 답을 해줘. 모르면 모른다고 답해줘.
+
+중요: 반드시 한국어 존대말로만 답변하세요. 영어로 답변하지 말고, 한글 서술형 문장으로만 작성하세요. 같은 내용을 반복하지 말고 간결하게, 완전한 문장으로 답변하세요.
+구분선(---, ===, ___) 금지, 취소선(~~텍스트~~) 금지, 참조 표시나 출처 문구 금지.
+```
+
+### 4.4 스트리밍 모드
+- RAG 답변: 스트리밍으로 실시간 표시
+- 직접 LLM 답변: 스트리밍으로 실시간 표시
+- 스트리밍 중에도 구분선 제거 적용
+
+### 4.5 다음 질문 3개 자동 생성
+- 모든 답변 생성 후 자동으로 다음 질문 3개 생성
+- 답변 끝에 "### 💡 다음에 물어볼 수 있는 질문들" 섹션 추가
+- 번호와 함께 질문 표시
+
+## 5. 대화 관리
+
+### 5.1 대화 기록
+- st.session_state.chat_history에 저장
+- st.markdown()으로 표시 (헤딩 색상 적용)
+
+### 5.2 대화 맥락 메모리
+- conversation_memory에 최근 50개 대화 저장
+- RAG 답변 생성 시 이전 대화 맥락 포함
+
+## 6. 특수 기능
+
+### 6.1 구분선/취소선 제거
+- 모든 답변에서 자동으로 구분선과 취소선 제거
+- remove_separators() 함수 사용
+
+### 6.2 헤딩 색상 스타일링
+- CSS로 h1, h2, h3 각각 다른 색상 적용
+- st.markdown()으로 표시하여 색상 적용
+
+### 6.3 로깅
+- 파일 로그와 콘솔 로그 모두 기록
+- ERROR, WARNING만 기록 (INFO는 기록 안 함)
+- HTTP 요청 로그는 비활성화
+
+## 7. 에러 처리
+- Ollama 서버 연결 실패 시 친절한 에러 메시지
+- 모델이 설치되지 않은 경우 안내 메시지
+- PDF 처리 실패 시 상세한 에러 정보
+- 임베딩 모델 로드 실패 시 대체 모델 제안
+- 벡터 스토어 검색 실패 시 에러 처리
+- 모든 예외 상황에 대한 적절한 에러 메시지 표시
+- 로그에 에러 기록
+- 사용자에게 친화적인 에러 메시지
+
+## 8. 환경 변수 (선택사항)
+- OLLAMA_BASE_URL: Ollama 서버 URL (기본값: http://localhost:11434)
+- .env 파일 지원 (dotenv 사용)
+
+## 9. 파일 구조
+- 로그 파일: logs/rag_ollama_YYYYMMDD.log
+
+## 10. 구현 시 주의사항
+- 모든 답변은 스트리밍 모드로 생성
+- 답변 표시는 st.markdown() 사용 (헤딩 색상 적용)
+- 구분선과 취소선은 자동으로 제거
+- 다음 질문 3개는 모든 답변에 자동 추가
+- INFO 레벨 로그는 출력하지 않음
+- 사이드바에 구분선(st.divider()) 사용 안 함
+- 현재 설정은 st.text()로 표시 (st.info() 사용 안 함)
+- Ollama 서버가 실행 중인지 확인하는 예외 처리를 추가하세요.
+- 임베딩 모델이 처음 로드될 때 시간이 걸릴 수 있으므로, 로딩 상태를 표시하세요.
+- FAISS 인덱스는 세션 상태에 저장하여 재사용하세요.
+- 대화 기록은 st.session_state에 저장하여 관리하세요.
+
+## 11. 생성 파일명
+- rag-ollama.py
+

@@ -1,0 +1,35 @@
+# 간단한 인터넷 검색 챗봇 만들기
+
+## 목적
+- Streamlit을 활용하여 간단한 인터넷 검색 챗봇을 만들기입니다.
+
+## 생성 파일명
+- internet.py
+
+## 요구사항
+- 나는 perplexity와 streamlit, 그리고 langchain을 활용해서 Internet 검색을 할 수 있는 챗봇을 만들고 싶다.
+- perplexity를 사용할 때는 langchain을 사용해서 다음처럼 해주세요:
+  ```python
+  from langchain_perplexity import ChatPerplexity
+  from langchain_core.messages import HumanMessage, AIMessage
+  
+  llm = ChatPerplexity(
+      api_key=perplexity_api_key,  # .env 파일에서 읽은 API 키
+      model="sonar-pro"  # 모델명은 "sonar-pro" (하이픈 포함)
+  )
+  
+  # 주의: llm.invoke()에는 문자열이 아닌 메시지 객체 리스트를 전달해야 합니다
+  messages = [HumanMessage(content="사용자 메시지")]
+  response = llm.invoke(messages)
+  ```
+- 제목은 "🌐 Internet Search Chatbot"
+- 이전 대화를 기억할 수 있도록 해주세요.
+- LLM 사용을 위한 API KEY는 .env에 있으니 반드시 python-dotenv의 load_dotenv()를 사용해 로드하세요.
+- .env 경로는 AI-Education/.env 입니다. 실행 위치와 무관하게 절대경로 기준으로 명시적으로 로드하세요.
+- 환경변수가 없으면 예외로 종료하지 말고 사용자에게 키 누락 메시지를 보여주세요.
+- API 키는 .env 파일에서 읽은 후 `.strip()`으로 앞뒤 공백을 제거해주세요.
+- 대화 기록을 LangChain 메시지 형식으로 변환해야 합니다:
+  - 사용자 메시지는 `HumanMessage(content=...)`로 변환
+  - AI 응답은 `AIMessage(content=...)`로 변환
+- 에러 처리를 추가해주세요 (특히 401 인증 오류에 대한 안내)
+- API 키가 없을 경우 Streamlit에서 명확한 안내 메시지를 표시하고 앱을 중지하세요. 

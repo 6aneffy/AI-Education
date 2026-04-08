@@ -1,0 +1,114 @@
+# 역할
+너는 공공 물가 데이터를 데이터베이스로 전환하는 데이터 엔지니어다.
+이미 병합된 CSV 파일을 기반으로 SQLite DB를 생성하고,
+동시에 Supabase에 데이터를 업로드하는 Python 프로그램을 작성한다.
+
+# 현재 데이터 상태
+
+이미 다음 파일이 존재한다:
+
+./5.DatabaseSQL/data/daejeon_price_merged.csv
+
+컬럼 구조:
+
+- month (YYYY-MM)
+- market_type (SSM, 전통시장 , 대형마트, 백화점)
+- category (농산물, 축산물, 수산물, 공산품 또는 nan)
+- item (품목명)
+- spec (규격)
+- price_source (평균, 매장명 등)
+- price (float)
+
+이 CSV는 여러 월, 여러 시트, 여러 파일이 병합된 최종 데이터이다.
+
+# 폴더 구조 (고정)
+
+- ./5.DatabaseSQL/data/     → CSV 및 DB 저장 위치
+- ./5.DatabaseSQL/code/     → Python 코드 생성 위치
+
+# 최종 산출물
+
+- ./5.DatabaseSQL/code/build_daejeon_price_db.py 생성
+- ./5.DatabaseSQL/data/daejeon_price.db 생성
+- Supabase에 데이터 업로드
+
+# 프로그램 파일명
+
+build_daejeon_price_db.py
+
+# 전체 작업 흐름
+
+1. ./5.DatabaseSQL/data/daejeon_price_merged.csv 로드
+2. 데이터 기본 검증 (row 수, 컬럼 목록, 상위 5행 출력)
+3. SQLite DB 생성
+   - 파일명: daejeon_price.db
+   - 기존 DB 있으면 삭제 후 재생성
+4. price_trends 테이블 생성
+   - CSV 컬럼 구조 그대로 사용
+5. SQLite DB에 전체 데이터 insert
+6. SQLite 테이블 목록, row 수, 샘플 출력
+
+7. Supabase 연동
+   - supabase-py 사용
+   - .env 파일에서 다음 값 로드
+     - SUPABASE_URL
+     - SUPABASE_ANON_KEY
+
+8. Supabase 작업
+   - 데이터 업로드 전 데이터 정제 필수:
+     * NaN 값을 None으로 변환 (Supabase는 NaN을 처리하지 못함)
+     * price 컬럼의 무한대 값(inf, -inf)을 None으로 변환 (JSON은 무한대 값을 처리하지 못함)
+     * numpy를 사용하여 np.isinf(), np.isnan() 함수로 검증
+     * 배치 업로드 시 각 레코드의 모든 float 값을 재검증하여 유효하지 않은 값 제거
+   - SQLite 또는 CSV 기반으로 전체 데이터 insert (배치 단위로 업로드, 1000개씩)
+
+## 각 작업에 있어서 price 가 0 이거나 null 인 row는 삭제한다.   
+
+# Supabase 테이블 설계
+
+테이블명: price_trends
+
+컬럼 (모든 컬럼 NULL 허용):
+- month (text, nullable)
+- market_type (text, nullable)
+- category (text, nullable)
+- item (text, nullable)
+- spec (text, nullable)
+- price_source (text, nullable)
+- price (real, nullable)
+
+> 주의: 위 설계에는 `id` 컬럼이 없다.  
+> Supabase에서 `select()` 호출 시 `id`를 지정하면  
+> `column price_trends.id does not exist` 에러가 발생하므로  
+> 반드시 위에 정의된 실제 컬럼 이름 또는 `"*"`를 사용해서 조회해야 한다.
+
+# 필수 출력 로그
+
+실행 시 반드시 출력:
+
+- CSV row 수
+- 컬럼 목록
+- SQLite DB 생성 완료
+- SQLite 테이블 row 수
+- Supabase 업로드 시작 로그
+- Supabase 업로드 완료 로그
+- Supabase row 수 확인 결과
+
+# 코드 품질 요구
+
+- 함수 단위 구성
+- main() 함수 포함
+- 단계별 print/log 출력
+- 예외 처리 포함
+- 실행 한 번으로 전체 자동 처리
+- numpy import 필수 (무한대 값 처리용)
+- Supabase 업로드 시 데이터 정제 필수 (NaN, inf 값 처리)
+
+# 실행 결과
+
+이 프로그램을 실행하면:
+
+1. daejeon_price_merged.csv → SQLite DB 변환
+2. ./5.DatabaseSQL/data/daejeon_price.db 생성
+4. Supabase에 전체 물가 데이터 업로드 완료
+5. 로컬 DB와 클라우드 DB가 동시에 구축된다.

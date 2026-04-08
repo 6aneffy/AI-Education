@@ -1,0 +1,338 @@
+# 역할
+
+DART(전자공시시스템) Open API를 이용하여 기업의 재무정보, 주요정보, 공시이벤트를 수집하고,
+LLM(OpenAI GPT-4o-mini)이 분석한 경영 브리핑을 Streamlit 대시보드로 시각화하는 웹 애플리케이션을 구축한다.
+사용자가 기업명을 입력하면 7종의 DART API를 호출하여 데이터를 수집하고,
+LLM이 "전략 기획팀 팀장" 관점에서 분석 보고서를 자동 생성하는 구조이다.
+
+---
+
+# 기술 스택
+
+- **언어:** Python
+- **프레임워크:** Streamlit
+- **LLM:** OpenAI GPT-4o-mini (재무 분석 및 보고서 생성)
+- **데이터 처리:** pandas
+- **차트 (웹):** plotly (Streamlit 화면 표시용)
+- **차트 (보고서):** matplotlib (DOCX 이미지 삽입용)
+- **HTTP 요청:** requests
+- **환경 변수:** python-dotenv
+- **DOCX 출력:** python-docx (Word 보고서 생성)
+- **XML 파싱:** xml.etree.ElementTree (표준 라이브러리)
+- **ZIP 처리:** zipfile, io (표준 라이브러리)
+- **외부 API:**
+  - OpenAI API (GPT-4o-mini) — 재무 분석 보고서 생성용
+  - DART Open API (opendart.fss.or.kr) — 재무/공시 데이터 조회용
+
+---
+
+# 프로젝트 구조
+
+./9.OpenAPI/
+
+- code/
+  - dart_report.py (Streamlit 앱, 만들어야함.)
+- data/
+  - DART_API_GUIDE.md (DART API 개발 가이드)
+- prompts/
+  - dart_report.txt (이 프롬프트 파일)
+
+---
+
+# 환경 변수
+
+- LLM 사용을 위한 API KEY는 .env에 있으니 반드시 python-dotenv의 load_dotenv()를 사용해 로드하세요.
+- .env 경로는 AI-Education/.env 입니다. 실행 위치와 무관하게 절대경로 기준으로 명시적으로 로드하세요.
+- 경로 계산: Path(__file__).resolve().parents[2] / ".env"
+- 환경변수가 없으면 예외로 종료하지 말고 사용자에게 키 누락 메시지를 보여주세요.
+
+필요한 환경 변수:
+- OPEN_DART_API_KEY: DART Open API 인증키 (40자리)
+- OPENAI_API_KEY: OpenAI API 키
+
+---
+
+# 핵심 동작 흐름 (3-Layer 구조)
+
+## Step 1: 데이터 레이어 (Data Extraction)
+
+### 1-1. 기업명 → corp_code 변환
+
+사용자가 기업명을 입력하면 DART 고유번호 API로 기업 목록을 받아 corp_code를 찾는다.
+
+API: https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={API_KEY}
+
+- 응답이 ZIP 파일(바이너리)이므로, io.BytesIO + zipfile로 메모리에서 처리한다.
+- ZIP 안의 CORPCODE.xml을 xml.etree.ElementTree로 파싱한다.
+- 각 <list> 요소에서 corp_code, corp_name, stock_code를 추출한다.
+- @st.cache_data(ttl=86400)로 하루 1회 캐싱한다 (전체 기업 목록이라 매번 호출하면 비효율적).
+- 사용자가 입력한 기업명으로 부분 매칭하여 후보 리스트를 보여주고, 정확한 기업을 선택하게 한다.
+- stock_code가 있는 상장사만 필터링하는 옵션을 제공한다.
+
+### 1-2. 재무정보 수집 (메인 데이터)
+
+API: https://opendart.fss.or.kr/api/fnlttSinglAcnt.json
+
+- 최근 3개년 사업보고서(reprt_code=11011)를 호출한다.
+- 연결재무제표(CFS)를 우선 사용하고, 없으면 개별재무제표(OFS)를 사용한다.
+- 손익계산서(sj_div=IS)에서 매출액, 영업이익, 당기순이익을 추출한다.
+- 금액 문자열의 콤마를 제거하고 정수로 변환한다.
+- 당기(thstrm_amount), 전기(frmtrm_amount), 전전기(bfefrmtrm_amount)를 사용하면
+  사업보고서 1회 호출로 3개년 데이터를 얻을 수 있다.
+
+### 1-3. 직원 현황 수집
+
+API: https://opendart.fss.or.kr/api/empSttus.json
+
+- 최신 사업연도, 사업보고서(11011)를 호출한다.
+- sm(합계), avrg_cnwk_sdytrn(평균 근속 연수), fyer_salary_totamt(연간 급여 총액), jan_salary_am(1인평균 급여)을 추출한다.
+- 총 직원 수와 매출액으로 1인당 매출액을 계산한다.
+
+### 1-4. 배당 정보 수집
+
+API: https://opendart.fss.or.kr/api/alotMatter.json
+
+- 최신 사업연도, 사업보고서(11011)를 호출한다.
+- se(구분), thstrm(당기), frmtrm(전기), lwfr(전전기)를 추출한다.
+
+### 1-5. 타법인 출자현황 수집
+
+API: https://opendart.fss.or.kr/api/otrCprInvstmntSttus.json
+
+- 최신 사업연도, 사업보고서(11011)를 호출한다.
+- inv_prm(법인명), invstmnt_purps(출자목적), trmend_blce_acntbk_amount(기말 장부가액)을 추출한다.
+
+### 1-6. 최근 공시 목록 수집
+
+API: https://opendart.fss.or.kr/api/list.json
+
+- 최근 6개월간의 공시를 조회한다 (bgn_de, end_de 사용).
+- page_count=20으로 최근 20건을 가져온다.
+- report_nm(보고서명), rcept_dt(접수일자)를 추출한다.
+
+### 1-7. 유상증자 결정 수집
+
+API: https://opendart.fss.or.kr/api/piicDecsn.json
+
+- 최근 1년간 조회한다 (bgn_de, end_de 사용).
+- 결과가 없으면("013" 상태) 빈 리스트로 처리한다.
+
+### 1-8. 소송 등의 제기 수집
+
+API: https://opendart.fss.or.kr/api/lwstLg.json
+
+- 최근 1년간 조회한다 (bgn_de, end_de 사용).
+- 결과가 없으면("013" 상태) 빈 리스트로 처리한다.
+
+---
+
+## Step 2: 분석 레이어 (LLM Reasoning)
+
+수집된 데이터를 GPT-4o-mini에게 전달하여 경영 분석 보고서를 생성한다.
+
+시스템 프롬프트:
+
+너는 대한민국 대기업 전략기획팀 팀장이야.
+아래에 제공되는 DART(전자공시시스템) 데이터를 기반으로 경영진 브리핑 보고서를 작성해.
+
+보고서 구성:
+1. **경영 성과 요약**: 매출액·영업이익·당기순이익의 3개년 추이를 요약하고, 영업이익률 변화를 분석해.
+2. **인적자원 분석**: 직원 수 변동, 1인당 매출액, 평균 근속연수를 바탕으로 인적 효율성을 평가해.
+3. **배당 정책 평가**: 배당금 추이를 보고 주주환원 정책에 대해 코멘트해.
+4. **리스크 및 기회 요인**: 최근 공시 내용(소송, 유상증자, 주요 공시)을 바탕으로 향후 리스크와 기회를 분석해.
+5. **종합 의견**: 위 분석을 종합하여 2~3문장으로 전략적 시사점을 제시해.
+
+작성 규칙:
+- 숫자는 억 원 단위로 환산하여 표기해 (예: 1,234억 원).
+- Markdown 형식으로 작성해.
+- 데이터가 없는 항목은 "해당 데이터 없음"으로 표기하고 분석에서 제외해.
+
+user 메시지에는 수집된 데이터를 아래 구조로 전달한다:
+
+[기업 정보]
+기업명: {corp_name}
+분석 기준 연도: {latest_year}
+
+[재무 수치 (3개년)]
+{재무 데이터 테이블}
+
+[직원 현황]
+{직원 데이터}
+
+[배당 정보]
+{배당 데이터}
+
+[타법인 출자]
+{출자 데이터 상위 5건}
+
+[최근 공시 (6개월)]
+{공시 목록}
+
+[특이 이벤트]
+유상증자: {유상증자 데이터}
+소송: {소송 데이터}
+
+OpenAI 호출 설정:
+- model: gpt-4o-mini
+- temperature: 0.3
+- stream: True (st.write_stream으로 스트리밍 출력)
+
+---
+
+## Step 3: 프리젠테이션 레이어 (Streamlit UI)
+
+### 페이지 설정
+
+- 페이지 제목: "DART 기업분석 보고서"
+- 페이지 아이콘: 📊
+- 레이아웃: wide
+
+### 사이드바
+
+- 사용 방법 안내 (번호 목록)
+- 분석 항목 안내 (불릿 목록)
+- 데이터 출처 표시
+
+### 상단 검색 영역
+
+페이지 상단에 가로 3컬럼으로 배치한다:
+- 컬럼 1 (3): 기업명 검색 입력 (st.text_input, 상장사만 필터링)
+- 컬럼 2 (4): 기업 선택 드롭다운 (st.selectbox, 부분 매칭 후보)
+- 컬럼 3 (2): "분석 시작" 버튼
+
+### 메인 영역 레이아웃 (세로 배치)
+
+분석 결과는 위에서 아래로 순서대로 표시한다:
+
+1. Plotly 차트: 매출/영업이익/당기순이익 3개년 그룹 바 차트 (전체 폭)
+2. 재무 상세 테이블 (전체 폭, st.dataframe)
+3. 2컬럼 구성:
+   - 왼쪽: 직원 현황 요약 테이블
+   - 오른쪽: 배당 정보 테이블
+4. 최근 공시 목록 (st.expander, 접기/펼치기)
+5. 특이 이벤트 (유상증자, 소송)
+6. 경영진 브리핑 (LLM Markdown, st.write_stream, 전체 폭)
+
+하단:
+1. DOCX 다운로드 버튼 (st.download_button)
+   - 차트 이미지 (matplotlib로 PNG 생성 후 삽입)
+   - 재무/직원/배당/공시 테이블 (스타일된 Word 테이블)
+   - LLM 경영진 브리핑 전문
+
+---
+
+# DART API 공통 사항
+
+1. 기본 URL: https://opendart.fss.or.kr/api/{endpoint}.json
+2. 인증: crtfc_key 파라미터에 OPEN_DART_API_KEY 전달
+3. 응답 status 코드:
+   - "000": 정상
+   - "010": 등록되지 않은 키
+   - "011": 사용할 수 없는 키
+   - "013": 조회된 데이터가 없음
+   - "020": 요청 제한 초과
+4. requests.get() 호출 시 timeout=15 설정
+5. status가 "013"인 경우 빈 리스트로 처리 (에러가 아님)
+6. status가 "000"이 아니고 "013"도 아닌 경우 에러 메시지 표시
+7. 금액 문자열 파싱: 콤마 제거 후 int 변환, 변환 실패 시 0 처리
+
+---
+
+# 데이터 가공
+
+## 재무 DataFrame 구성
+
+fnlttSinglAcnt API 응답에서 CFS(연결재무제표) 데이터를 필터링하고,
+사업보고서(reprt_code=11011) 1회 호출로 당기/전기/전전기 3개년 데이터를 추출한다.
+
+추출 대상 계정명(account_nm):
+- 매출액 (또는 수익(매출액))
+- 영업이익 (또는 영업이익(손실))
+- 당기순이익 (또는 당기순이익(손실))
+
+금액 파싱 규칙:
+- 콤마(",") 제거
+- 음수 표기("-") 유지
+- 빈 문자열이나 파싱 불가능한 값은 0으로 처리
+
+추가 계산:
+- 영업이익률(%) = 영업이익 / 매출액 × 100
+
+## 직원 효율성 계산
+
+- 총 직원 수: sm 필드의 합계 (부문별로 여러 행이 올 수 있으므로 합산)
+- 1인당 매출액: 매출액 / 총 직원 수
+- 평균 근속 연수: avrg_cnwk_sdytrn
+
+## 이벤트 요약
+
+공시목록, 유상증자, 소송 데이터를 텍스트로 요약하여 LLM에 전달한다.
+
+---
+
+# 세션 상태 관리
+
+다음 변수를 st.session_state에 저장:
+- corp_list: 캐싱된 전체 기업 목록 (DataFrame)
+- selected_corp: 선택된 기업 정보 (corp_code, corp_name)
+- financial_data: 수집된 재무 데이터
+- analysis_result: LLM 분석 결과
+
+---
+
+# 코드 품질 요구
+
+- 함수 단위 구성:
+  - load_corp_codes(): 고유번호 ZIP 다운로드 및 파싱
+  - search_corp(keyword): 기업명 부분 매칭 검색
+  - fetch_financial_summary(corp_code, year): 재무정보 API 호출
+  - fetch_employee_status(corp_code, year): 직원현황 API 호출
+  - fetch_dividend_info(corp_code, year): 배당정보 API 호출
+  - fetch_investment_status(corp_code, year): 타법인출자 API 호출
+  - fetch_disclosure_list(corp_code): 공시목록 API 호출
+  - fetch_capital_increase(corp_code): 유상증자 API 호출
+  - fetch_lawsuit(corp_code): 소송 API 호출
+  - parse_amount(amount_str): 금액 문자열 파싱
+  - build_financial_df(data): 재무 DataFrame 구성
+  - generate_analysis(data_bundle): LLM 분석 보고서 생성 (스트리밍)
+  - create_chart_image(df, year): matplotlib로 차트 PNG 바이트 생성
+  - create_docx_report(data_bundle, analysis_text): DOCX 보고서 생성
+  - main(): Streamlit 앱 메인 함수
+- main() 함수 포함
+- 단계별 상태 표시 (st.spinner, st.success, st.error)
+- 예외 처리 포함 (try-except)
+- @st.cache_data로 기업 목록 캐싱
+
+---
+
+# 실행 방법
+
+```bash
+cd 9.OpenAPI/code
+streamlit run dart_report.py
+```
+
+---
+
+# 첨부 파일 안내
+
+이 프롬프트와 함께 아래 파일을 참고합니다:
+
+1. **DART_API_GUIDE.md** — DART Open API 개발 가이드
+   - 고유번호, 공시검색, 단일회사 주요계정, 단일회사 전체 재무제표,
+     배당에 관한 사항, 직원 현황, 타법인 출자현황, 유상증자 결정, 소송 등의 제기
+   - 총 9개 API의 요청/응답 스펙 포함
+
+---
+
+# 최종 목표
+
+이 시스템은:
+
+- DART API 기반 기업 재무 데이터 자동 수집
+- 7종 API 데이터를 결합한 다차원 기업 분석
+- GPT-4o-mini 기반 경영진 브리핑 자동 생성
+- Plotly 차트(웹)와 Pandas 테이블로 시각화
+- 차트 이미지 + 테이블 + 브리핑을 포함한 DOCX Word 보고서 다운로드
+
+이 결합된 DART 기업분석 보고서 대시보드이다.

@@ -1,0 +1,441 @@
+# 역할
+
+한전(KEPCO) 빅데이터 Open API 10종을 활용하여 
+전력계통 해석·영향평가 사업을 지원하는 Streamlit 대시보드를 구축한다.
+기술사·엔지니어가 지역을 선택하면 계통연계 여유용량, 신재생에너지 현황,
+전력 수급 구조를 자동 분석하고 GPT-4o-mini가 컨설팅 리포트를 생성한다.
+
+---
+
+# 기술 스택
+
+- **언어:** Python
+- **프레임워크:** Streamlit
+- **LLM:** OpenAI GPT-4o-mini (분석 리포트 스트리밍 생성)
+- **데이터 처리:** pandas
+- **차트 (웹):** plotly (express + graph_objects)
+- **차트 (보고서):** matplotlib (DOCX 이미지 삽입용, Agg 백엔드, 맑은 고딕 폰트)
+- **HTTP 요청:** requests
+- **환경 변수:** python-dotenv
+- **DOCX 출력:** python-docx (Document, WD_ALIGN_PARAGRAPH, Cm, Pt, RGBColor)
+- **외부 API:**
+  - OpenAI API (GPT-4o-mini) — 컨설팅 리포트 생성
+  - 한전 빅데이터 Open API (bigdata.kepco.co.kr) — 전력 데이터 10종 조회
+
+---
+
+# 프로젝트 구조
+
+./9.OpenAPI/
+
+- code/
+  - kepco_energy.py (Streamlit 앱)
+- data/
+  - KEPCO_API_GUIDE.md (한전 API 개발 가이드)
+- prompts/
+  - kepco_energy.txt (이 프롬프트 파일)
+
+---
+
+# 환경 변수
+
+- .env 경로: /.env
+- 경로 계산: Path(__file__).resolve().parents[2] / ".env"
+- 환경변수가 없으면 st.error()로 안내 후 st.stop()
+
+필요한 환경 변수:
+- KEPCO_API_KEY: 한전 Open API 인증키 (40자리)
+- OPENAI_API_KEY: OpenAI API 키
+
+전역 상수:
+- KEPCO_BASE = "https://bigdata.kepco.co.kr/openapi/v1"
+- LOGO_PATH = Path(__file__).resolve().parents[2] / "logo.png"
+
+---
+
+# 사용 API 10종
+
+## 코드 기반 API (공통코드로 지역코드 조회)
+
+| 번호 | API명 | 엔드포인트 | 코드체계 | 탭 |
+|------|--------|-----------|---------|-----|
+| 13 | 공통코드 | commonCode.do | - | 인프라 |
+| 12 | 분산전원연계 | dispersedGeneration.do | 법정동 | Tab1,3 |
+| 8 | 신재생에너지 | renewEnergy.do | **전체조회+클라이언트필터** | Tab1,3 |
+| 1 | 계약종별 전력사용량 | powerUsage/contractType.do | 법정동 | Tab2 |
+| 2 | 산업분류별 전력사용량 | powerUsage/industryType.do | 법정동 | Tab2 |
+| 3 | 업종별 전력사용량 | powerUsage/businessType.do | 텍스트(이름) | Tab2 |
+| 4 | 가구평균 전력사용량 | powerUsage/houseAve.do | 법정동 | Tab2 |
+| 5 | 고객증감 | change/custNum/industryType.do | 법정동 | Tab2 |
+| 7 | 전기차충전소 | EVcharge.do | 일반 | Tab1 |
+| 10 | 전자입찰 | electContract.do | 날짜범위 | Tab4 |
+
+## 코드 체계 차이 (중요)
+
+- **법정동 코드**: codeTy=lglDngMetroCd / lglDngCityCd → API 1,2,4,5,12에서 사용
+- **일반 코드**: codeTy=metroCd / cityCd → API 7에서 사용
+- **텍스트**: API 3은 metro/city에 코드가 아닌 이름 문자열 전달
+- **전체조회+필터**: API 8(renewEnergy.do)은 metroCd를 보내면 404가 발생하는 API 특성이 있어, metroCd 파라미터 없이 전체 조회한 후 응답의 metro 필드에서 클라이언트 측 필터링 수행
+- 사이드바에서 지역 선택 시 두 코드체계를 모두 저장하여 API별로 적절한 코드를 사용
+
+## API 응답 필드 주의사항
+
+- API 2,4 응답: `powerUseage` (오타, `powerUsage`가 아님) → build 함수에서 rename 처리
+- API 12 응답: vol1/vol2/vol3가 빈 문자열일 수 있음 → safe_num()으로 파싱
+- API 12 응답: jsSubstPwr, jsDlPwr(정격용량)가 0 또는 빈 문자열일 수 있음 → 추정용량 사용
+- API 3: metro/city 파라미터에 코드가 아닌 지역 이름을 전달
+
+---
+
+# 유틸리티 함수
+
+## safe_num(val) → float
+- None, 빈 문자열, "-" → 0.0
+- 콤마 제거 후 float 변환
+- 실패 시 0.0 반환
+
+## fmt_kw(val) → str
+- 1000 이상 → "X.X MW"
+- 미만 → "X kW"
+
+## fmt_kwh(val) → str
+- 1,000,000 이상 → GWh, 1,000 이상 → MWh, 미만 → kWh
+
+## fmt_won(val) → str
+- 1억 이상 → "X.X억 원", 1만 이상 → "X만 원", 미만 → "X원"
+
+---
+
+# KEPCO API 공통 호출 함수 (_call_kepco)
+
+```
+def _call_kepco(endpoint, params) -> list[dict]:
+```
+
+- params에 apiKey와 returnType=json 자동 추가
+- None 값 파라미터는 제거 (dict comprehension)
+- 에러 처리:
+  - **404 응답**: st.warning("데이터가 없습니다 ({endpoint}). 조회 연도·지역을 변경해 보세요.")후 빈 리스트 반환
+  - **기타 HTTP 에러**: requests.RequestException 캐치, 에러 메시지에서 apiKey= 이후를 "apiKey=***"로 마스킹하여 API 키 노출 방지
+  - **파싱 에러**: ValueError, KeyError 캐치
+- 응답에서 body.get("data") or body.get("totData") or [] 반환
+
+---
+
+# 공통코드 로딩
+
+## load_all_codes() — @st.cache_data(ttl=86400)
+
+commonCode.do를 4회 호출:
+- lglDngMetroCd (법정동 시도)
+- lglDngCityCd (법정동 시군구 + uppoCd로 시도 매핑)
+- metroCd (일반 시도)
+- cityCd (일반 시군구 + uppoCd로 시도 매핑)
+
+## build_region_info(codes, metro_name, city_name) → dict
+
+선택된 지역의 모든 코드를 하나의 dict로 반환:
+```
+{
+  "metro_name": str,
+  "city_name": str | None,
+  "metro_lgldng": str | None,
+  "metro_regular": str | None,
+  "city_lgldng": str | None,
+  "city_regular": str | None,
+}
+```
+- lgldng_metros/regular_metros에서 codeNm으로 매칭
+- 시군구는 uppoCd == 해당 시도코드인 것 중 codeNm 매칭
+
+---
+
+# 개별 API 호출 함수
+
+| 함수명 | API | 파라미터 | 코드 | 비고 |
+|--------|-----|---------|------|------|
+| fetch_dispersed_generation(region) | 12 | metroCd, cityCd | metro_lgldng, city_lgldng | |
+| fetch_renew_energy(year, region) | 8 | year만 전달 | **metroCd 미전송** | 전체 조회 후 metro_name으로 클라이언트 필터링 |
+| fetch_contract_usage(year, month, region) | 1 | year, month, metroCd, cityCd | metro_lgldng, city_lgldng | |
+| fetch_industry_usage(year, month, region) | 2 | year, month, metroCd, cityCd | metro_lgldng, city_lgldng | |
+| fetch_house_avg(year, month, region) | 4 | year, month, metroCd, cityCd | metro_lgldng, city_lgldng | |
+| fetch_customer_change(year, month, region) | 5 | year, month, metroCd, cityCd | metro_lgldng, city_lgldng | |
+| fetch_ev_charge(region) | 7 | metroCd, cityCd | metro_regular, city_regular | |
+| fetch_elect_contract(begin_date, end_date) | 10 | noticeBeginDate, noticeEndDate | 날짜(YYYYMMDD) | |
+
+### fetch_renew_energy 특별 처리 (중요)
+
+renewEnergy.do는 metroCd 파라미터를 보내면 어떤 코드(일반/법정동)든 404가 반환되는 API 특성이 있다.
+따라서:
+1. metroCd 없이 year만 전달하여 전국 데이터를 조회
+2. 응답의 metro 필드(예: "대전광역시")에 region["metro_name"]이 포함되는지로 클라이언트 필터링
+3. metro_name이 비어있거나 데이터가 없으면 전체 데이터를 그대로 반환
+
+---
+
+# 데이터 가공 함수
+
+## _calc_saturation(connected, spare, rated) → float
+
+포화율(%) 계산 로직:
+1. rated(정격용량) > 0 이면 → connected / rated × 100
+2. rated == 0이고 spare(여유용량) > 0 이면 → connected / (connected + spare) × 100
+3. rated == 0이고 spare == 0이고 connected > 0 이면 → **-1.0 반환** (데이터 없음 표시)
+4. 그 외 → 0.0
+
+-1 반환값은 테이블/차트에서 "데이터 없음"으로 표시하며 차트에서는 제외한다.
+
+## build_substation_summary(raw) → DataFrame
+
+변전소 단위 집계 (substCd 기준 중복 제거):
+- jsSubstPwr → rated, substPwr → connected, vol1 → spare
+- 추정용량 = rated > 0 ? rated : connected + spare
+- 포화율 = _calc_saturation(connected, spare, rated)
+- **"비고" 컬럼 추가**: 포화율 < 0이면 "여유용량 데이터 없음"
+
+컬럼: 변전소코드, 변전소명, 추정용량(kW), 누적연계(kW), 여유용량(kW), 포화율(%), 비고
+
+## build_dl_detail(raw) → DataFrame
+
+DL(배전선로) 단위 정리:
+- jsDlPwr → rated, dlPwr → connected, vol3 → spare
+- 추정용량 = rated > 0 ? rated : connected + spare
+- 포화율 = _calc_saturation(connected, spare, rated)
+- **"비고" 컬럼 추가**: 포화율 < 0이면 "여유용량 데이터 없음"
+- 포화율 기준 내림차순 정렬
+
+컬럼: 변전소명, 변압기번호, DL코드, DL명, 추정용량(kW), DL누적연계(kW), DL여유용량(kW), 포화율(%), 비고
+
+## build_renew_df(raw) → DataFrame
+- cnt, capacity, areaCnt, areaCapacity를 safe_num 적용
+
+## build_contract_df(raw) → DataFrame
+- custCnt, powerUsage, bill, unitCost, cntrPwr를 safe_num 적용
+
+## build_industry_df(raw) → DataFrame
+- **powerUseage → powerUsage 컬럼명 변환** (API 오타 처리)
+- custCnt, powerUsage, bill, unitCost를 safe_num 적용
+
+## build_house_df(raw) → DataFrame
+- **powerUseage → powerUsage 컬럼명 변환** (API 오타 처리)
+- houseCnt, powerUsage, bill을 safe_num 적용
+
+## build_cust_change_df(raw) → DataFrame
+- new, expansion, cancel을 safe_num 적용
+- 순증감 = new + expansion - cancel 컬럼 추가
+
+---
+
+# AI 분석 (스트리밍)
+
+## stream_analysis(system_prompt, user_data) → Generator
+
+- OpenAI GPT-4o-mini, temperature=0.3, stream=True
+- system + user 메시지 2개
+- yield로 chunk.choices[0].delta.content 스트리밍
+
+## AI 시스템 프롬프트 4종 (전역 상수)
+
+### GRID_SYSTEM_PROMPT
+- 역할: 한국전력 출신 20년 경력 배전계획 전문가
+- 소견 구조: 변전소 여유용량 → DL 분석 → 신재생 밀집도 → 연계 추천 → 추가 검토 필요사항
+- 규칙: kW 단위, Markdown, "데이터 없음" 항목 제외
+
+### PROFILE_SYSTEM_PROMPT
+- 역할: 에너지 시장 분석 전문가
+- 분석 구조: 수요 구조 → 산업 분석 → 성장 추세 → RE100 잠재력 → 사업 기회
+- 규칙: MWh/GWh 단위, Markdown
+
+### RENEW_SYSTEM_PROMPT
+- 역할: 신재생에너지 시장 전략가
+- 분석 구조: 발전원별 분포 → 시장 포화도 → 계통 연계 가능성 → PSS/E 시사점 → 전략 권고
+- 규칙: kW/MW 단위, Markdown
+
+### CONSULTING_SYSTEM_PROMPT
+- 역할: 수석 전력계통 컨설턴트, 발송배전기술사
+- 리포트 구조: 대상지역 개요 → 계통연계 현황 → 신재생에너지 현황 → 전력 수요 분석 → PSS/E 사전 검토 → 사업 기회 및 권고사항 → 종합 의견
+
+---
+
+# DOCX 보고서 생성
+
+## create_report_docx(region, analysis_text, subst_df, renew_df, contract_df) → bytes
+
+- 폰트: 맑은 고딕, 10pt
+- 제목: 중앙 정렬, 파란색(#1A56DB)
+- 메타: 대상 지역, 작성일, 작성 시스템
+- 본문 섹션:
+  1. 변전소 여유용량 현황 (테이블)
+  2. 신재생에너지 현황 (테이블, genSrc/metro/city/cnt/capacity)
+  3. 계약종별 전력사용량 (테이블)
+  4. AI 종합 분석 (텍스트)
+- _add_heading: 파란색 섹션 제목
+- _add_df_table: DataFrame을 Word 테이블로 변환 (Light Grid Accent 1 스타일, max 30행)
+
+---
+
+# 핵심 동작 흐름
+
+## Step 0: 공통코드 로딩 (캐싱)
+
+앱 시작 시 commonCode.do를 4회 호출하여 모든 지역코드를 캐싱한다:
+- lglDngMetroCd (법정동 시도)
+- lglDngCityCd (법정동 시군구 + uppoCd로 시도 매핑)
+- metroCd (일반 시도)
+- cityCd (일반 시군구 + uppoCd로 시도 매핑)
+
+사이드바에서 시도→시군구 캐스케이드 선택을 제공한다.
+선택된 지역의 법정동 코드와 일반 코드를 모두 보관한다.
+
+## Step 1: Tab 1 - 계통연계 타당성 검토
+
+사용 API: 12(분산전원연계) + 8(신재생에너지) + 7(전기차충전소)
+
+1. dispersedGeneration.do 호출 → 변전소/변압기/DL 여유용량 수집
+2. 변전소별 집계: 추정용량, 누적연계, 여유 + _calc_saturation으로 포화율(%) 계산
+3. DL별 상세: 포화율 계산 + "비고" 컬럼 (데이터 부족 표시)
+4. renewEnergy.do 호출 (metroCd 없이) → 같은 지역 신재생 발전기 현황
+5. EVcharge.do 호출 → EV 충전인프라 현황 (보조 정보)
+6. GPT-4o-mini가 "배전계획 전문가" 관점에서 계통연계 소견 작성
+
+### Tab 1 시각화
+
+**변전소별 여유용량 (수평 스택 바)**:
+- 누적연계(빨강 #ef4444) + 여유용량(초록 #22c55e) 수평 스택 바 차트
+- 테이블: 포화율을 표시할 때 값이 < 0이면 "데이터 없음" 텍스트로 치환
+
+**배전선로(DL) 포화율 (수평 바)**:
+- DL누적연계 > 0 AND 포화율 >= 0인 DL만 필터링하여 상위 20개 표시
+- 색상: 80% 이상 빨강, 50% 이상 노랑, 미만 초록
+- 바에 포화율(%) 텍스트 레이블 추가 (textposition="outside")
+- 여유용량 데이터 없는 DL 수를 st.caption으로 안내
+- expander로 DL 전체 데이터 표시 (포화율 < 0은 "데이터 없음" 표시)
+
+**신재생에너지**: 발전기 수·총 용량·발전원 종류 metric + 발전원별 도넛 차트
+
+**EV 충전소**: expander 안에 급속/완속 충전기 대수
+
+**AI 분석**: st.container(border=True) 안에 스트리밍 → session_state["grid_analysis"]에 저장
+
+## Step 2: Tab 2 - 지역 전력 수급 프로파일
+
+사용 API: 1(계약종별) + 2(산업분류별) + 4(가구평균) + 5(고객증감)
+
+1. contractType.do → 계약종별 전력사용량 (주택/일반/산업/교육/농사)
+2. industryType.do → 산업분류별 전력사용량 (제조/건설/도매 등)
+3. houseAve.do → 가구평균 전력사용량 및 요금
+4. custNum/industryType.do → 산업별 신설/증설/해지 건수
+5. GPT-4o-mini가 "에너지 시장 분석가" 관점에서 수요 구조 인사이트 작성
+
+### Tab 2 시각화
+
+- 핵심 지표: 총 고객수, 총 전력사용량, 총 전기요금, 산업용 비중 (4열 metric)
+- 계약종별 도넛 차트
+- 산업분류별 Top 10 수평 바 차트
+- 가구평균: 시도/시군구/가구수/평균사용량/평균요금 테이블
+- 고객 증감: 산업별 신설(초록)/증설(파랑)/해지(빨강) relative 바 차트
+- AI 분석 → session_state["profile_analysis"]에 저장
+
+## Step 3: Tab 3 - 신재생에너지 시장 분석
+
+사용 API: 8(신재생에너지) + 12(분산전원연계, Tab1 session_state 참조)
+
+1. renewEnergy.do → 시도 전체 시군구별 발전원별 현황
+2. 발전원별 분포 (2열: 도넛 + 바), 시군구별 Top 10, 시군구×발전원 히트맵
+3. PSS/E 입력용 CSV 다운로드 (utf-8-sig 인코딩)
+4. Tab 1의 session_state 변전소 데이터와 교차 분석
+5. GPT-4o-mini가 "신재생에너지 전략가" 관점에서 시장 분석 작성
+
+## Step 4: Tab 4 - AI 종합 컨설팅 리포트
+
+사용 데이터: session_state에 저장된 Tab 1~3 분석 결과 + API 10(전자입찰)
+
+1. Tab 1~3에서 수집된 데이터를 통합 (available 체크)
+2. electContract.do → 사용자 지정 기간(기본 30일) 입찰정보 조회
+3. GPT-4o-mini가 "수석 전력계통 컨설턴트" 관점에서 종합 리포트 작성
+4. python-docx로 Word 보고서 생성 → 다운로드 제공
+5. 최소 1개 탭 분석이 완료되어야 리포트 생성 가능
+
+---
+
+# UI 레이아웃
+
+## 페이지 설정
+
+- 페이지 제목: "전력계통 사업 인텔리전스"
+- 페이지 아이콘: ⚡
+- 레이아웃: wide
+
+## 페이지 헤더
+
+- 로고 이미지: /logo.png (프로젝트 루트의 logo.png)
+- 경로 계산: Path(__file__).resolve().parents[2] / "logo.png"
+- **로고 있을 때**: st.columns([1, 4])로 좌측에 로고(width=160), 우측에 제목·부제목
+  - 제목: `<h1 style='margin-bottom:0;'>전력계통 사업 인텔리전스</h1>`
+  - 부제목: `<p style='color:#6b7280; margin-top:0;'>한전 빅데이터 기반 계통 분석 도구</p>`
+  - unsafe_allow_html=True
+- **로고 없을 때**: 제목·부제목만 표시 (같은 HTML 마크다운)
+
+## 사이드바
+
+- "## 분석 설정" 제목
+- 시도 선택 (selectbox, 법정동 코드 기준 metro_names)
+- 시군구 선택 (selectbox, uppoCd로 필터링, "전체" 옵션 포함)
+- 분석 연도 (selectbox, 현재연도~2019, 기본값 index=2 → 현재연도-2, 한전 API 데이터 지연 반영)
+- 분석 월 (selectbox, 01~12 제로패딩, 기본값 현재월-2)
+- 구분선 + 사용 방법 안내 (4단계)
+- 구분선 + 데이터 출처 caption
+
+## 메인 영역 (st.tabs 4개)
+
+탭명: "계통연계 타당성", "전력 수급 프로파일", "신재생에너지 시장", "종합 컨설팅 리포트"
+각 탭 상단에 분석 시작 버튼(type="primary", use_container_width=True) → 클릭 시 API 호출 및 결과 표시.
+분석 결과는 session_state에 저장하여 Tab 4에서 통합 사용.
+
+### session_state 키 목록
+
+| 키 | 저장 내용 | 저장 시점 |
+|---|---|---|
+| grid_subst_df | 변전소 집계 DataFrame | Tab 1 |
+| grid_dl_df | DL 상세 DataFrame | Tab 1 |
+| grid_renew_df | 신재생에너지 DataFrame | Tab 1 |
+| grid_analysis | AI 계통연계 소견 텍스트 | Tab 1 |
+| profile_contract_df | 계약종별 DataFrame | Tab 2 |
+| profile_industry_df | 산업분류별 DataFrame | Tab 2 |
+| profile_analysis | AI 수급 인사이트 텍스트 | Tab 2 |
+| renew_market_df | 신재생에너지 시장 DataFrame | Tab 3 |
+| renew_analysis | AI 신재생 시장 분석 텍스트 | Tab 3 |
+| bid_data | 입찰 정보 raw list | Tab 4 |
+| full_analysis | AI 종합 분석 텍스트 | Tab 4 |
+
+---
+
+# 코드 품질 요구
+
+- main() 함수 포함, if __name__ == "__main__": main()
+- 함수 단위 구성 (API 호출 / 데이터 가공 / 차트 / AI / DOCX / 탭 렌더링)
+- @st.cache_data로 공통코드 캐싱 (ttl=86400)
+- 단계별 상태 표시 (st.spinner, st.success, st.warning, st.info)
+- API 에러 처리: 404는 친절한 메시지, API 키 노출 방지 (apiKey=*** 마스킹)
+- 타입 힌트 (Python 3.10+ 스타일: str | None, list[dict] 등)
+- safe_num() 유틸리티로 안전한 숫자 파싱
+- _calc_saturation() 으로 포화율 계산 시 데이터 부족(-1) 처리
+- 포화율 표시: 테이블에서 < 0 이면 "데이터 없음" 텍스트, 차트에서는 해당 항목 제외
+
+---
+
+# 실행 방법
+
+```bash
+cd 9.OpenAPI/code
+streamlit run kepco_energy.py
+```
+
+---
+
+# 첨부 파일 안내
+
+1. **KEPCO_API_GUIDE.md** — 한전 Open API 10종 가이드
+  - 공통코드, 분산전원연계, 신재생에너지, 계약종별/산업분류별/업종별/가구평균 전력사용량,
+    산업분류별 고객증감, 전기차충전소, 전자입찰 계약정보
+  - 각 API의 요청/응답 스펙 포함

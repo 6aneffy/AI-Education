@@ -1,0 +1,62 @@
+# SK하이닉스 Global Memory Intelligence 대시보드
+# 개요 및 목적
+본 애플리케이션은 SK하이닉스 AX(AI Transformation) 및 영업/마케팅 임원들이 메모리 반도체 시장의 B2B 특성을 반영한 실시간 데이터를 파악하기 위해 설계되었습니다. 단순 뉴스 수집을 넘어 DXI 등 가격 지표 변동과 경쟁사(삼성, 마이크론) 간의 기술 격차를 데이터 기반으로 분석하여 전략적 인사이트를 제공합니다.
+
+# 개발 환경 및 설정
+파일명: app.py (기존 파일 존재 시 삭제 후 신규 생성)
+# 환경 변수: .env 파일을 통해 OpenAI API Key 및 Search API Key를 안전하게 관리.
+# UI 프레임워크: 
+- Streamlit (SK하이닉스 브랜드 가이드라인인 Orange & Deep Blue 테마 적용, 제목부터 적용).
+- UI와 답변스타일은 항상 프로젝트 디렉토리에 있는 ref.py를 참고해서 UI를 만들고, 답변을 해줘.
+# 데이터 소스 및 수집 항목
+
+## 타겟 검색 사이트
+반도체 전문: DigiTimes(대만), TrendForce(시장조사), EE Times, AnandTech.
+경제/금융: Bloomberg Technology, Reuters(Semiconductor), Barron's.
+커뮤니티: Reddit (r/hardware, r/semiconductors), X(전문 반도체 애널리스트 포스트).
+
+## 수집 데이터 스키마 (Data Schema)
+- 기본 정보: 매체명, 국가, 날짜, 대상 제품군(HBM3E/4, DDR5, LPDDR5X, Enterprise SSD, HBF(High Bandwidth Flash 등등)).
+- 기술 사양: 수율(Yield), 적층수(Layers), 전력 효율(PPA: Power, Performance, Area), 공정 단계(1b, 1c nm).
+- 고객 동향: Nvidia, Apple, Microsoft, Google 등 Big Tech의 구매 의향 및 수주 소식.
+
+# 대시보드 주요 기능 및 처리 로직
+## 기본 UI 구성
+- Sidebar: * 마켓 리서치 토픽 입력창 (예: "HBM3E 경쟁 현황", "서버용 DDR5 수요").
+- sidebar: 3가지 핵심 버튼: [시장 동향 수집], [기술 및 가격 분석], [임원 전략 보고서].
+
+##  <시장 동향 수집> 버튼
+로직: gpt-5.2 web_search 도구를 활용하여 설정된 타겟 사이트에서 최신 자료 10~15개를 수집.
+시각화: 수집 과정을 Progress Bar로 표시하고, 결과를 Pandas DataFrame으로 요약하여 출력.
+
+##  <기술 및 가격 분석> 버튼 (심화 분석)
+가격 지표 분석: 수집된 텍스트 데이터 내 품목별 가격 지표 언급을 추출하여 현재 시장의 '공급 과잉/부족' 상태를 진단.
+경쟁사 비교 매트릭스: SK하이닉스, 삼성전자, 마이크론 3사의 최신 기술력을 표 형태로 자동 생성.
+비교 항목: HBM4 양산 시점, DDR5 전력 소모량, 낸드플래시 적층 기술 등.
+
+## <경쟁사 비교 분석> 버튼 (신규 추가)
+LLM 구조화: 수집된 10~20개의 뉴스 데이터를 바탕으로 삼성전자와 마이크론의 최신 공정(예: 1b nm, 1c nm) 진입 현황을 비교.
+결과물: * Comparison Table: 주요 사양별 3사 비교표.
+
+## <임원 전략 보고서> 버튼 (자동 생성)
+보고서 스타일: DX 부문 임원(VP급 이상) 보고용 격식체.
+
+- 구성 항목:
+
+시장의 핵심 모멘텀: 가격 반등 시그널 또는 고객사 수요 변화.
+비판적 여론 및 리스크: 수율 이슈, 경쟁사 선점 소식 등 즉시 대응이 필요한 사항.
+공급망 인사이트: TSMC-Nvidia-SK하이닉스 파트너십 내의 전략적 위치 분석.
+광고/영업 카피 제언: 고객사향 B2B 핵심 가치 제안(Value Proposition) 3종.
+임원 Follow-up Issue: 차기 경영회의에서 점검해야 할 핵심 지표 3가지.
+
+# 기술사항
+- Langchain은 사용하되 Langgraph는 사용하지 마세요.
+- CSS는 사용해도 됨. (SK 하이닉스의 회사 logo와 컬러에 맞춰줘)
+- ref.py는 프로젝트 최상위 디렉토리에 있어. 
+- 모든 폰트는 ref.py 에서 사용하는 폰트, 컬러, 크기와 같도록 해주고
+문단을 h1, h2, h3을 활용해서 나누어 설명해줘.
+- 답변 문체는 서술형으로 해줘.
+- 버튼도 일렬로 배치해줘. 칼러도 넣어줘.
+- langsmith는 사용하지 말아줘.
+- use_container_width=True 를 전부 width="stretch"로 교체
+
