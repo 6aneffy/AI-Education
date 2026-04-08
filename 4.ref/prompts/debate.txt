@@ -38,15 +38,24 @@ streamlit으로 구현
 - 최대 토론 횟수 만큼 토론. 
 - 서로 같은 말을 중복하지 않도록 한다. 할말이 없으면 중지.
 - 도구 유형은 다음 3개 중 하나 선택.
-- 인터넷 검색은 perplexity (sonar-pro) 사용
-- perplexity 사용예
-	from langchain_perplexity import ChatPerplexity
+- 인터넷 검색은 OpenAI **GPT-5 nano** + **Responses API** 내장 도구 **`web_search`** 로 수행한다. API 키는 **`OPENAI_API_KEY`** 만 사용한다 (Perplexity / `PERPLEXITY_API_KEY` 없음).
+- **알려진 오류:** `langchain_openai.ChatOpenAI.bind_tools([{"type": "web_search"}])` 는 LangChain 버전에 따라 호스팅 도구를 함수 스키마로 바꾸려다 **`ValueError: Unsupported function`** 이 난다. 웹 검색은 **`openai` SDK** 의 `responses.create` 로 구현한다.
+- 사용 예 (단발/멀티턴은 `previous_response_id` 로 연결):
 
-    	# 공식 문서에서 확인한 유효한 모델명을 명시적으로 지정
-   	llm = ChatPerplexity(
-        api_key=perplexity_api_key,
-        model="sonar-pro"
-        llm.invoke("Perplexity API 연결 테스트입니다.")
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key=openai_api_key)
+response = client.responses.create(
+    model="gpt-5-nano",
+    input="검색 질의 또는 컨텍스트가 포함된 사용자 메시지",
+    tools=[{"type": "web_search"}],
+    # previous_response_id=이전_response.id,  # 멀티턴 시
+)
+# 출력 파싱: response.output, response.output_text, url_citation 등
+```
+
+- 자세한 패턴·UI 처리는 `3.first/prompts/4.internet.txt` 를 참고한다.
 - 문서검색을 선택하면 각 에이전트 설정에 pdf 문서를 선택할 수 있도록 함
 - 도구없음은 LLM 자체적으로 토론 생성.
 

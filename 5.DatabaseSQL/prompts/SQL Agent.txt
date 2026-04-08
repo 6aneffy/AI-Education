@@ -79,7 +79,7 @@ Agent가 수행:
 - 현재 분석 대상 요약
 - 누적 질의 기반 핵심 이슈 정리
 - 월별 동향 분석
-- Perplexity API 기반 외부 원인 분석 (사이드바 설정에 따라)
+- OpenAI **GPT-5 nano** + Responses API **`web_search`** 기반 외부 원인 분석 (사이드바 설정에 따라, `OPENAI_API_KEY` 사용)
 - 그래프 자동 수집
 - DOCX 보고서 생성
 
@@ -92,7 +92,7 @@ Agent가 수행:
 ## 3. 사이드바 설정
 
 - LLM 모델 선택 (gpt-4o-mini, gpt-5.3)
-- 외부 검색 사용 체크박스 (Perplexity API)
+- 외부 검색 사용 체크박스 (OpenAI 웹 검색: GPT-5 nano + `web_search`, `OPENAI_API_KEY`)
 - 대화 초기화 버튼 (모든 대화 기록 및 분석 데이터 초기화)
 - 데이터베이스 정보 표시
 - 사용 팁 안내
@@ -131,16 +131,19 @@ output/charts/
 
 ---
 
-## C. Perplexity API 연동
+## C. OpenAI 웹 검색 연동 (GPT-5 nano, Responses API)
 
 - 사이드바에서 외부 검색 허용 여부 설정 가능
 - 기본 모드에서도 사용 가능 (선택적)
 - 리포트 모드에서도 사용 가능 (선택적)
 - 품목 추출 후 자동으로 외부 원인 분석 수행
-- 품목 + 기간 기반 검색
-- 원인 요약 생성
+- 품목 + 기간 기반 검색 질의를 `responses.create` 의 `input` 으로 전달
+- 원인 요약 생성 (모델 출력은 텍스트·인용 블록 형태일 수 있음 → 앱 규칙에 맞게 평문 처리)
 - 분석 결과에 외부 원인 정보 포함
 - 품목을 찾을 수 없으면 적절한 메시지 표시
+- 구현은 **`openai` SDK** 권장: `OpenAI().responses.create(model="gpt-5-nano", tools=[{"type": "web_search"}], input=..., previous_response_id=...)` . **`OPENAI_API_KEY`** 만 사용 (Perplexity 키 없음).
+- **알려진 오류:** `langchain_openai.ChatOpenAI.bind_tools([{"type": "web_search"}])` 는 LangChain 버전에 따라 **`ValueError: Unsupported function`** 이 발생한다. 웹 검색 경로에서는 `bind_tools` 로 `web_search` 를 넘기지 말 것.
+- 401·할당량·연결 오류 시 사용자에게 안내하고 로그에 기록한다.
 
 ---
 
@@ -189,7 +192,7 @@ python-docx 사용
 - 종합 SQL 수행
 - 모든 그래프 재생성
 - 차트를 PNG로 저장 후 DOCX에 이미지로 삽입 (HTML 경로 나열 금지, kaleido 필수 아님)
-성성- Perplexity 호출
+- OpenAI 웹 검색(`responses.create`, `web_search`) 호출
 - DOCX 생성
 
 ---

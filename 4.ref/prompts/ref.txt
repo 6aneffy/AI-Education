@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from typing import Any
-from langchain_perplexity import ChatPerplexity
+from openai import OpenAI
 from datetime import datetime
 import logging
 import re
@@ -57,7 +57,7 @@ import re
 
 2. **인터넷 검색 선택**
    - 라디오 버튼으로 선택
-   - 옵션: "사용 안 함", "Perplexity 사용"
+   - 옵션: "사용 안 함", "OpenAI 웹 검색 (GPT-5 nano)"
    - 기본값: "사용 안 함"
 
 3. **RAG (PDF 검색) 선택**
@@ -95,10 +95,14 @@ def remove_separators(text: str) -> str:
     - 연속된 빈 줄 정리
 ```
 
-### 3.3 Perplexity 검색 함수
-- 시스템 메시지에 헤딩 구조화 지시 포함
-- 대화 기록 관리 (user/assistant 교차)
+### 3.3 OpenAI 웹 검색 함수 (GPT-5 nano, Responses API)
+- 웹 검색은 OpenAI **Responses API** 의 내장 도구 `web_search` 로 수행한다. 모델: **`gpt-5-nano`**. API 키: **`OPENAI_API_KEY`** (Perplexity / `PERPLEXITY_API_KEY` 사용 안 함).
+- 구현은 **`openai` Python SDK** 권장: `OpenAI().responses.create(model="gpt-5-nano", input=..., tools=[{"type": "web_search"}], previous_response_id=...)` . 멀티턴 시 직전 `response.id` 를 `previous_response_id` 로 넘긴다.
+- **알려진 오류 (반드시 회피):** `langchain_openai.ChatOpenAI.bind_tools([{"type": "web_search"}])` 는 설치된 LangChain 버전에 따라 호스팅 도구 dict 를 OpenAI **함수** 스키마로 변환하려다 **`ValueError: Unsupported function`** 이 난다. 웹 검색 경로에서는 `bind_tools` 로 `web_search` 를 넘기지 말고 SDK `responses.create` 를 사용한다.
+- 시스템/프롬프트에 헤딩 구조화 지시 포함 가능
+- 대화 기록 관리 (user/assistant 교차 또는 `previous_response_id` 체인)
 - h1, h2, h3로 구조화된 답변 생성
+- 응답 본문이 블록 리스트·`url_citation` 형태일 수 있으므로 UI 표시용으로 텍스트·출처를 가공한다.
 
 ### 3.4 PDF 처리
 - PyPDFLoader 사용
@@ -110,7 +114,7 @@ def remove_separators(text: str) -> str:
 ## 4. 답변 생성 로직
 
 ### 4.1 우선순위
-1. 인터넷 검색이 "Perplexity 사용"이면 → Perplexity 검색 사용
+1. 인터넷 검색이 "OpenAI 웹 검색 (GPT-5 nano)"이면 → Responses API `web_search` 검색 사용
 2. 인터넷 검색이 "사용 안 함"이고:
    - RAG가 "사용"이고 PDF 파일이 있으면 → RAG 사용
    - RAG가 "사용"이지만 PDF 파일이 없으면 → 경고 메시지
@@ -129,7 +133,7 @@ def remove_separators(text: str) -> str:
 ### 4.3 스트리밍 모드
 - RAG 답변: 스트리밍으로 실시간 표시
 - 직접 LLM 답변: 스트리밍으로 실시간 표시
-- Perplexity: 스트리밍 없음 (완성된 텍스트 표시)
+- OpenAI 웹 검색(GPT-5 nano): 기본은 `responses.create` 완료 후 한 번에 표시(필요 시 SDK 스트리밍 API 별도 검토). RAG/직접 LLM 과 동일한 스트리밍 UX를 강제하지 않아도 된다.
 - 스트리밍 중에도 구분선 제거 적용
 
 ### 4.4 다음 질문 3개 자동 생성
@@ -168,8 +172,7 @@ def remove_separators(text: str) -> str:
 - 사용자에게 친화적인 에러 메시지
 
 ## 8. 환경 변수
-- OPENAI_API_KEY: 필수
-- PERPLEXITY_API_KEY: Perplexity 사용 시 필요
+- OPENAI_API_KEY: 필수 (채팅용 LLM·임베딩·**웹 검색(GPT-5 nano)** 공통)
 - GOOGLE_API_KEY: Gemini 사용 시 필요
 - LLM 사용을 위한 API KEY는 .env에 있으니 반드시 python-dotenv의 load_dotenv()를 사용해 로드하세요.
 - .env 경로는 AI-Education/.env 입니다. 실행 위치와 무관하게 절대경로 기준으로 명시적으로 로드하세요.
@@ -180,7 +183,7 @@ def remove_separators(text: str) -> str:
 - 로그 파일: logs/chatbot_YYYYMMDD.log
 
 ## 10. 구현 시 주의사항
-- 모든 답변은 스트리밍 모드로 생성 (Perplexity 제외)
+- 모든 답변은 스트리밍 모드로 생성 (OpenAI 웹 검색 경로는 예외 가능)
 - 답변 표시는 st.markdown() 사용 (헤딩 색상 적용)
 - 구분선과 취소선은 자동으로 제거
 - 다음 질문 3개는 모든 답변에 자동 추가
