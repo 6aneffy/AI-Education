@@ -89,7 +89,7 @@ uv --version
 ## 4. Python 설치
 
 ```powershell
-uv python install 3.11.9
+uv python install 3.11.9 //cd ~ 실행 후 홈 디렉토리에서 설치할 것.
 ```
 
 - Python 설치 확인
@@ -160,7 +160,6 @@ Cursor AI 껐다가 재실행
 - OpenAI: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
   - Copy하고 비밀 장소에 보관 (done 누르면 다시는 copy 할 수 없음)
-- Perplexity: [https://console.perplexity.ai](https://console.perplexity.a)
 
 > 모든 키는 `.env-sample` 파일에 입력하며,
 > 입력 후 파일 이름을 `.env-sample` 에서 `.env` 로 변경 필수

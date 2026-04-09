@@ -33,6 +33,7 @@ brew install uv
 ```powershell
 cd ~
 ```
+
 C:/Users/사용자ID 로 이동
 
 ### 3-2. 프로젝트 다운로드
@@ -40,6 +41,7 @@ C:/Users/사용자ID 로 이동
 ```powershell
 git clone https://github.com/6aneffy/AI-Education.git
 ```
+
 - 폴더로 이동
 
 ```sh
@@ -56,11 +58,22 @@ uv sync
 
 ## 4. Cursor AI 설치
 
-Visual Studio Code 기반으로, AI Vibe Coding을 도와주는 IDE입니다.
+- 다운로드: [https://www.cursor.com/](https://www.cursor.com/)
+- 설치 후 로그인 및 Extensions에서 아래 항목 설치
 
-```sh
-brew install cursor --cask
-```
+  - Extensions = 왼쪽 메뉴에서 테트리스 블록 모양 or ctrl+shift+X 로 실행
+  - Python
+    - ms-python 제공
+  - Jupyter
+    - ms-toolsai 제공
+  - Korean Language Pack for Visual Studio Code
+    - MS-CEINTL 제공, 지구본 아이콘
+  - vscode-pdf
+    - tomoki1207
+
+Cursor AI 껐다가 재실행
+
+
 
 ## 5. API Key 발급 및 설정
 
@@ -68,11 +81,9 @@ brew install cursor --cask
 
 ### 발급 대상
 
-- OpenAI: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys) 
-	- Copy하고 비밀 장소에 보관 (done 누르면 다시는 copy 할 수 없음)
+- OpenAI: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
-- Perplexity: [https://console.perplexity.ai](https://console.perplexity.a) 
-    
+  - Copy하고 비밀 장소에 보관 (done 누르면 다시는 copy 할 수 없음)
 
 > 모든 키는 `.env-sample` 파일에 입력하며,
 > 입력 후 파일 이름을 `.env-sample` 에서 `.env` 로 변경 필수
